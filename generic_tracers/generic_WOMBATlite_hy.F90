@@ -1216,12 +1216,12 @@ module generic_WOMBATlite_hy
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
     vardesc_temp = vardesc( &
-        'reminr', 'Rate of remineralisation', 'h', 'L', 's', '/s', 'f')
+        'reminr', 'Rate of remineralisation', 'h', 'L', 's', '(mmol C m-3)-1 s-1', 'f')
     wombat%id_reminr = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
     vardesc_temp = vardesc( &
-        'reminr_nn', 'Rate of remineralisation emulator', 'h', 'L', 's', '/s', 'f')
+        'reminr_nn', 'Rate of remineralisation emulator', 'h', 'L', 's', '(mmol C m-3)-1 s-1', 'f')
     wombat%id_reminr_nn = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
     
