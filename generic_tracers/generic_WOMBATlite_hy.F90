@@ -170,7 +170,8 @@ module generic_WOMBATlite_hy
   real, parameter :: missing_value1 = -1.0e+10
 
   ! allocate fields for ftorch use
-  logical                           :: remin_ready = .false. ! pre-run checks
+  logical                           :: remin_ready = .false. ! model loaded
+  logical                           :: remin_buffers_ready = .false.
   type(torch_model)                 :: remin_model
   type(torch_tensor), dimension(1)  :: remin_in, remin_out
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
@@ -545,7 +546,6 @@ module generic_WOMBATlite_hy
   subroutine emulator_init()
     ! Initialise FTorch model
     logical :: file_exists
-    integer :: default_batch
 
     if (remin_ready) return
 
@@ -553,18 +553,31 @@ module generic_WOMBATlite_hy
     if (.not. file_exists) call mpp_error(FATAL, &
          'generic_WOMBAT_lite: emulator file not found: '//trim(remin_emulator_path))
 
-    default_batch = 128
-
-    allocate(remin_x1(default_batch, 4), remin_y1(default_batch))
-    remin_x1 = 1.0d0
-    remin_y1 = 0.0d0
-
     call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
-    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
-    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
     remin_ready = .true.
 
   end subroutine emulator_init
+
+  subroutine emulator_prepare(nmax)
+    integer, intent(in) :: nmax
+
+    if (remin_buffers_ready) then
+      if (size(remin_x1,1) < nmax) call mpp_error(FATAL, &
+          'generic_WOMBAT_lite: emulator batch exceeds initialized buffer')
+      return
+    endif
+
+    if (.not. remin_ready) call mpp_error(FATAL, &
+        'generic_WOMBAT_lite: emulator model is not initialized')
+
+    allocate(remin_x1(nmax, 4), remin_y1(nmax))
+    remin_x1 = 1.0d0
+    remin_y1 = 0.0d0
+    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    remin_buffers_ready = .true.
+
+  end subroutine emulator_prepare
 
   subroutine emulator_remin_batch(temp, o2, detr, zoos, rate)
     real(kind=8), intent(in)  :: temp(:), o2(:), detr(:), zoos(:)
@@ -577,11 +590,10 @@ module generic_WOMBATlite_hy
     n = size(temp)
     if (n <= 0) return
 
-    if (.not. allocated(remin_x1) .or. size(remin_x1,1) < n .or. size(remin_x1,2) /= 4) then
-      if (allocated(remin_x1)) deallocate(remin_x1)
-      if (allocated(remin_y1)) deallocate(remin_y1)
-      allocate(remin_x1(n,4), remin_y1(n))
-    endif
+    if (.not. remin_buffers_ready) call mpp_error(FATAL, &
+        'generic_WOMBAT_lite: emulator buffers are not initialized')
+    if (n > size(remin_x1,1)) call mpp_error(FATAL, &
+        'generic_WOMBAT_lite: emulator batch exceeds initialized buffer')
 
     remin_x1 = 1.0d0
     remin_y1 = 0.0d0
@@ -595,8 +607,6 @@ module generic_WOMBATlite_hy
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
-    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
-    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
     call torch_model_forward(remin_model, remin_in, remin_out)
     call ieee_set_flag(trap_flags, .false.)
     call ieee_set_halting_mode(trap_flags, halting)
@@ -2549,6 +2559,7 @@ module generic_WOMBATlite_hy
 
     if (do_emulator_shadow .or. do_emulator_run) then
       nmax = (iec - isc + 1) * (jec - jsc + 1) * nk
+      call emulator_prepare(nmax)
       allocate(temp_b(nmax), o2_b(nmax), detr_b(nmax), zoos_b(nmax), rate_b(nmax))
       allocate(i_b(nmax), j_b(nmax), k_b(nmax))
 
