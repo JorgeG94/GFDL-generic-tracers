@@ -4352,6 +4352,7 @@ module generic_WOMBATlite_hy
   ! </SUBROUTINE>
   !
   subroutine generic_WOMBATlite_hy_end
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
     call torch_tensor_delete(remin_in)
     call torch_tensor_delete(remin_out)
 
@@ -4362,8 +4363,6 @@ module generic_WOMBATlite_hy
     remin_buffers_ready = .false.
     remin_ready = .false.
     remin_batch_size = 0
-    
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
     call user_deallocate_arrays
 
   end subroutine generic_WOMBATlite_hy_end
