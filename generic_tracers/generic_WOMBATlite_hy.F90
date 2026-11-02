@@ -177,6 +177,11 @@ module generic_WOMBATlite_hy
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
   real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
   integer                           :: remin_batch_size = 0
+  logical                           :: remin_traps_saved = .false.
+  logical                           :: remin_traps_disabled = .false.
+  logical                           :: remin_halting(3)
+  type(ieee_flag_type), parameter   :: remin_trap_flags(3) = &
+      [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
 
   !=======================================================================
   ! Namelist Options
@@ -582,22 +587,32 @@ module generic_WOMBATlite_hy
   end subroutine emulator_prepare
 
   subroutine emulator_remin_batch()
-    type(ieee_flag_type), parameter :: trap_flags(3) = &
-            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
-    logical :: halting(3)
-
     if (remin_batch_size <= 0) return
 
     if (.not. remin_buffers_ready) call mpp_error(FATAL, &
         'generic_WOMBAT_lite: emulator buffers are not initialized')
 
-    call ieee_get_halting_mode(trap_flags, halting)
-    call ieee_set_halting_mode(trap_flags, .false.)
     call torch_model_forward(remin_model, remin_in, remin_out)
-    call ieee_set_flag(trap_flags, .false.)
-    call ieee_set_halting_mode(trap_flags, halting)
 
   end subroutine emulator_remin_batch
+
+  subroutine emulator_disable_traps()
+    if (remin_traps_disabled) return
+
+    call ieee_get_halting_mode(remin_trap_flags, remin_halting)
+    remin_traps_saved = .true.
+    call ieee_set_halting_mode(remin_trap_flags, .false.)
+    remin_traps_disabled = .true.
+  end subroutine emulator_disable_traps
+
+  subroutine emulator_restore_traps()
+    if (.not. remin_traps_disabled) return
+
+    call ieee_set_flag(remin_trap_flags, .false.)
+    if (remin_traps_saved) call ieee_set_halting_mode(remin_trap_flags, remin_halting)
+    remin_traps_saved = .false.
+    remin_traps_disabled = .false.
+  end subroutine emulator_restore_traps
 
   subroutine emulator_remin(temp, o2, detr, zoos, rate)
     real(kind=8), intent(in)  :: temp, o2, detr, zoos
@@ -2734,6 +2749,9 @@ module generic_WOMBATlite_hy
     c_pools(:,:,:,:) = 0.0
     fe_pools(:,:,:,:) = 0.0
 
+    if ((do_emulator_shadow .or. do_emulator_run) .and. nvalid > 0) &
+        call emulator_disable_traps()
+
     do tn = 1,ts_npzd  !{
 
       n_pools(:,:,:,1) = n_pools(:,:,:,2)
@@ -3532,6 +3550,9 @@ module generic_WOMBATlite_hy
 
       enddo; enddo; enddo
     enddo !} nested timestep (ts_npzd)
+
+    if ((do_emulator_shadow .or. do_emulator_run) .and. nvalid > 0) &
+        call emulator_restore_traps()
 
     ! Add biotically induced tendency to biotracers
     !-----------------------------------------------------------------------
