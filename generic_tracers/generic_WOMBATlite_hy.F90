@@ -131,7 +131,8 @@ module generic_WOMBATlite_hy
   use time_manager_mod,  only: time_type
   use constants_mod,     only: WTMCO2, WTMO2
   use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
-                               torch_tensor_from_array, torch_model_forward ! AO (16/10/2026)
+                               torch_tensor_from_array, torch_model_forward, &
+                               torch_model_delete, torch_tensor_delete  
   use, intrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, ieee_overflow, &
           ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
 
@@ -4351,8 +4352,18 @@ module generic_WOMBATlite_hy
   ! </SUBROUTINE>
   !
   subroutine generic_WOMBATlite_hy_end
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
+    call torch_tensor_delete(remin_in)
+    call torch_tensor_delete(remin_out)
 
+    if (allocated(remin_x1)) deallocate(remin_x1)
+    if (allocated(remin_y1)) deallocate(remin_y1)
+    
+    call torch_model_delete(remin_model)
+    remin_buffers_ready = .false.
+    remin_ready = .false.
+    remin_batch_size = 0
+    
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
     call user_deallocate_arrays
 
   end subroutine generic_WOMBATlite_hy_end
