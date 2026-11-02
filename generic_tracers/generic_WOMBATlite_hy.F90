@@ -2269,7 +2269,7 @@ module generic_WOMBATlite_hy
     logical                                 :: used
     integer                                 :: ii, jj, kk, ncell, nvalid
     integer, allocatable                    :: i_b(:), j_b(:), k_b(:)
-    real                                    :: det_kg, det_mmol
+    real                                    :: det_kg, det_mmol, rate
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
     character(len=256), parameter           :: error_header = &
