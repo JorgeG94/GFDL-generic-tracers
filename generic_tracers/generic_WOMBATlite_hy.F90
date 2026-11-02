@@ -176,6 +176,7 @@ module generic_WOMBATlite_hy
   type(torch_tensor), dimension(1)  :: remin_in, remin_out
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
   real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
+  integer                           :: remin_batch_size = 0
 
   !=======================================================================
   ! Namelist Options
@@ -562,8 +563,8 @@ module generic_WOMBATlite_hy
     integer, intent(in) :: nmax
 
     if (remin_buffers_ready) then
-      if (size(remin_x1,1) < nmax) call mpp_error(FATAL, &
-          'generic_WOMBAT_lite: emulator batch exceeds initialized buffer')
+      if (remin_batch_size /= nmax) call mpp_error(FATAL, &
+          'generic_WOMBAT_lite: valid-cell count changed after emulator initialization')
       return
     endif
 
@@ -575,35 +576,20 @@ module generic_WOMBATlite_hy
     remin_y1 = 0.0d0
     call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
     call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    remin_batch_size = nmax
     remin_buffers_ready = .true.
 
   end subroutine emulator_prepare
 
-  subroutine emulator_remin_batch(temp, o2, detr, zoos, rate)
-    real(kind=8), intent(in)  :: temp(:), o2(:), detr(:), zoos(:)
-    real(kind=8), intent(out) :: rate(size(temp))
-    integer :: n, i
+  subroutine emulator_remin_batch()
     type(ieee_flag_type), parameter :: trap_flags(3) = &
             [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
     logical :: halting(3)
 
-    n = size(temp)
-    if (n <= 0) return
+    if (remin_batch_size <= 0) return
 
     if (.not. remin_buffers_ready) call mpp_error(FATAL, &
         'generic_WOMBAT_lite: emulator buffers are not initialized')
-    if (n > size(remin_x1,1)) call mpp_error(FATAL, &
-        'generic_WOMBAT_lite: emulator batch exceeds initialized buffer')
-
-    remin_x1 = 1.0d0
-    remin_y1 = 0.0d0
-
-    do i = 1, n
-      remin_x1(i,1) = temp(i)
-      remin_x1(i,2) = o2(i)
-      remin_x1(i,3) = detr(i)
-      remin_x1(i,4) = zoos(i)
-    enddo
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
@@ -611,25 +597,27 @@ module generic_WOMBATlite_hy
     call ieee_set_flag(trap_flags, .false.)
     call ieee_set_halting_mode(trap_flags, halting)
 
-    do i = 1, n
-      rate(i) = remin_y1(i)
-    enddo
-
   end subroutine emulator_remin_batch
 
   subroutine emulator_remin(temp, o2, detr, zoos, rate)
     real(kind=8), intent(in)  :: temp, o2, detr, zoos
     real(kind=8), intent(out) :: rate
-    real(kind=8) :: tempv(1), o2v(1), detrv(1), zoosv(1), ratev(1)
+    real(kind=8) :: tempv(1), o2v(1), detrv(1), zoosv(1)
 
     tempv(1) = temp
     o2v(1)   = o2
     detrv(1) = detr
     zoosv(1) = zoos
 
-    call emulator_remin_batch(tempv, o2v, detrv, zoosv, ratev)
+    if (.not. remin_buffers_ready .or. remin_batch_size /= 1) call mpp_error(FATAL, &
+        'generic_WOMBAT_lite: scalar emulator call requires a batch size of one')
+    remin_x1(1,1) = tempv(1)
+    remin_x1(1,2) = o2v(1)
+    remin_x1(1,3) = detrv(1)
+    remin_x1(1,4) = zoosv(1)
+    call emulator_remin_batch()
 
-    rate = ratev(1)
+    rate = remin_y1(1)
 
   end subroutine emulator_remin
 
@@ -2261,8 +2249,7 @@ module generic_WOMBATlite_hy
     real                                    :: dzt_bot, dzt_bot_os
     real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools, fe_pools
     logical                                 :: used
-    integer                                 :: ii, jj, kk, ncell, nvalid, nmax
-    real(kind=8), allocatable               :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
+    integer                                 :: ii, jj, kk, ncell, nvalid
     integer, allocatable                    :: i_b(:), j_b(:), k_b(:)
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
@@ -2558,24 +2545,33 @@ module generic_WOMBATlite_hy
     if (do_tracer_dicr) call g_tracer_get_pointer(tracer_list, 'dicr', 'field', wombat%p_dicr) ! [mol/kg]
 
     if (do_emulator_shadow .or. do_emulator_run) then
-      nmax = (iec - isc + 1) * (jec - jsc + 1) * nk
-      call emulator_prepare(nmax)
-      allocate(temp_b(nmax), o2_b(nmax), detr_b(nmax), zoos_b(nmax), rate_b(nmax))
-      allocate(i_b(nmax), j_b(nmax), k_b(nmax))
-
       nvalid = 0
       do kk = 1, nk
         do jj = jsc, jec
           do ii = isc, iec
             if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
               nvalid = nvalid + 1
-              i_b(nvalid) = ii
-              j_b(nvalid) = jj
-              k_b(nvalid) = kk
             endif
           enddo
         enddo
       enddo
+      if (nvalid > 0) then
+        call emulator_prepare(nvalid)
+        allocate(i_b(nvalid), j_b(nvalid), k_b(nvalid))
+        ncell = 0
+        do kk = 1, nk
+          do jj = jsc, jec
+            do ii = isc, iec
+              if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
+                ncell = ncell + 1
+                i_b(ncell) = ii
+                j_b(ncell) = jj
+                k_b(ncell) = kk
+              endif
+            enddo
+          enddo
+        enddo
+      endif
     else
       nvalid = 0
     endif
@@ -2749,15 +2745,14 @@ module generic_WOMBATlite_hy
           ii = i_b(ncell)
           jj = j_b(ncell)
           kk = k_b(ncell)
-          temp_b(ncell) = Temp(ii,jj,kk)
-          o2_b(ncell)   = max(0.0, wombat%p_o2(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-          detr_b(ncell) = max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-          zoos_b(ncell) = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+          remin_x1(ncell,1) = Temp(ii,jj,kk)
+          remin_x1(ncell,2) = max(0.0, wombat%p_o2(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+          remin_x1(ncell,3) = max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+          remin_x1(ncell,4) = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
         enddo
 
         if (nvalid > 0) then
-          call emulator_remin_batch(temp_b(1:nvalid), o2_b(1:nvalid), &
-              detr_b(1:nvalid), zoos_b(1:nvalid), rate_b(1:nvalid))
+          call emulator_remin_batch()
 
           do ncell = 1, nvalid
             ii = i_b(ncell)
@@ -2765,13 +2760,13 @@ module generic_WOMBATlite_hy
             kk = k_b(ncell)
 
             if (do_emulator_shadow) then
-              wombat%reminr_nn(ii,jj,kk) = min(rate_b(ncell), &
+              wombat%reminr_nn(ii,jj,kk) = min(remin_y1(ncell), &
                   max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
                   (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
             endif
 
             if (do_emulator_run) then
-              wombat%reminr(ii,jj,kk) = min(rate_b(ncell), &
+              wombat%reminr(ii,jj,kk) = min(remin_y1(ncell), &
                   max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
                   (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
             endif
@@ -4111,7 +4106,7 @@ module generic_WOMBATlite_hy
 
     deallocate(kmeuph, k100)
     if (do_emulator_shadow .or. do_emulator_run) then
-      deallocate(temp_b, o2_b, detr_b, zoos_b, rate_b, i_b, j_b, k_b)
+      if (nvalid > 0) deallocate(i_b, j_b, k_b)
     endif
 
   end subroutine generic_WOMBATlite_hy_update_from_source
