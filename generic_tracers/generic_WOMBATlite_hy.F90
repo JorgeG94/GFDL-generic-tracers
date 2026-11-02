@@ -592,6 +592,9 @@ module generic_WOMBATlite_hy
     if (.not. remin_buffers_ready) call mpp_error(FATAL, &
         'generic_WOMBAT_lite: emulator buffers are not initialized')
 
+    ! FTorch move-assigns inference results into the output tensor, so recreate
+    ! this alias before each call to keep remin_y1 connected to the result.
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
     call torch_model_forward(remin_model, remin_in, remin_out)
 
   end subroutine emulator_remin_batch
